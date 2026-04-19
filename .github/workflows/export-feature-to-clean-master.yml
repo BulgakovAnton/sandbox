@@ -1,0 +1,161 @@
+name: Prepare export branch for Space
+
+on:
+  push:
+    branches:
+      - '**/WRS-*'
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Feature branch to export'
+        required: true
+        type: string
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      CLEAN_BASE: origin/master
+      DEV_BASE: origin/master-jetforcer
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch required branches
+        run: |
+          git fetch origin master master-jetforcer --prune
+
+      - name: Resolve source branch
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SOURCE_BRANCH="${{ inputs.source_branch }}"
+            git fetch origin "${SOURCE_BRANCH}:${SOURCE_BRANCH}"
+          else
+            SOURCE_BRANCH="${GITHUB_REF_NAME}"
+          fi
+
+          EXPORT_BRANCH="export/${SOURCE_BRANCH}"
+
+          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "export_branch=${EXPORT_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          echo "Source branch: ${SOURCE_BRANCH}"
+          echo "Export branch: ${EXPORT_BRANCH}"
+
+      - name: Verify .github was not changed in feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE_BRANCH="${{ steps.source.outputs.source_branch }}"
+
+          if git diff --name-only "${DEV_BASE}...${SOURCE_BRANCH}" -- .github | grep .; then
+            echo "ERROR: .github was changed in feature branch"
+            exit 1
+          fi
+
+          echo ".github was not changed"
+
+      - name: Collect feature commits
+        id: commits
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SOURCE_BRANCH="${{ steps.source.outputs.source_branch }}"
+          COMMITS="$(git rev-list --reverse --no-merges "${DEV_BASE}..${SOURCE_BRANCH}")"
+
+          if [ -z "${COMMITS}" ]; then
+            echo "No feature commits to export"
+            echo "has_commits=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Commits to export:"
+          echo "${COMMITS}"
+
+          {
+            echo "has_commits=true"
+            echo "commits<<EOF"
+            echo "${COMMITS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create temporary clean branch from master
+        if: steps.commits.outputs.has_commits == 'true'
+        id: temp
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEMP_BRANCH="tmp-export-${GITHUB_RUN_ID}"
+          git checkout -B "${TEMP_BRANCH}" "${CLEAN_BASE}"
+
+          echo "temp_branch=${TEMP_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Temporary branch: ${TEMP_BRANCH}"
+
+      - name: Cherry-pick commits onto temporary clean branch
+        if: steps.commits.outputs.has_commits == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r commit; do
+            [ -z "$commit" ] && continue
+            echo "Cherry-picking $commit"
+            git cherry-pick -x "$commit"
+          done <<< "${{ steps.commits.outputs.commits }}"
+
+      - name: Publish temporary result as export branch
+        if: steps.commits.outputs.has_commits == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPORT_BRANCH="${{ steps.source.outputs.export_branch }}"
+          git branch -f "${EXPORT_BRANCH}" HEAD
+          git checkout "${EXPORT_BRANCH}"
+
+      - name: Final safety checks
+        if: steps.commits.outputs.has_commits == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git ls-tree -r --name-only HEAD | grep '^.github/'; then
+            echo "ERROR: .github exists in export branch"
+            exit 1
+          fi
+
+          echo "Export branch is clean"
+
+      - name: Push export branch
+        if: steps.commits.outputs.has_commits == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPORT_BRANCH="${{ steps.source.outputs.export_branch }}"
+          git push --force origin "${EXPORT_BRANCH}"
+
+      - name: Cleanup temporary branch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEMP_BRANCH="${{ steps.temp.outputs.temp_branch }}"
+          if [ -n "${TEMP_BRANCH:-}" ]; then
+            git branch -D "${TEMP_BRANCH}" || true
+          fi
