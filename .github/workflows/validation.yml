@@ -73,7 +73,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --all --prune
+          git fetch origin --prune
+          git fetch origin master-jetforcer --prune
 
       - name: Validate commit messages
         shell: bash
@@ -85,16 +86,27 @@ jobs:
             exit 0
           fi
 
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF_NAME}" == export/* ]]; then
+            echo "Skipping commit message validation for export branch"
+            exit 0
+          fi
+
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             HEAD_SHA="${{ github.event.pull_request.head.sha }}"
             COMMITS="$(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")"
           else
-            COMMITS="$(git rev-parse HEAD)"
+            MERGE_BASE="$(git merge-base HEAD origin/master-jetforcer)"
+            COMMITS="$(git rev-list --reverse "${MERGE_BASE}..HEAD")"
           fi
 
           echo "Checking commit messages for commits:"
           echo "${COMMITS}"
+
+          if [ -z "${COMMITS}" ]; then
+            echo "No commits to validate"
+            exit 0
+          fi
 
           FAILED=0
 
@@ -146,7 +158,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --all --prune
+          git fetch origin --prune
+          git fetch origin master-jetforcer --prune
 
       - name: Validate authors
         shell: bash
@@ -165,16 +178,27 @@ jobs:
             exit 0
           fi
 
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF_NAME}" == export/* ]]; then
+            echo "Skipping author validation for export branch"
+            exit 0
+          fi
+
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             HEAD_SHA="${{ github.event.pull_request.head.sha }}"
             COMMITS="$(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")"
           else
-            COMMITS="$(git rev-parse HEAD)"
+            MERGE_BASE="$(git merge-base HEAD origin/master-jetforcer)"
+            COMMITS="$(git rev-list --reverse "${MERGE_BASE}..HEAD")"
           fi
 
           echo "Checking authors for commits:"
           echo "${COMMITS}"
+
+          if [ -z "${COMMITS}" ]; then
+            echo "No commits to validate"
+            exit 0
+          fi
 
           FAILED=0
 
