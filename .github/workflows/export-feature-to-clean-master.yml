@@ -32,6 +32,10 @@ jobs:
         run: |
           git fetch origin master master-jetforcer --prune
 
+      - name: Configure git identity
+        run: |
+          git config user.name "Writerside Export Bot"
+          git config user.email "writerside-export-bot@jetbrains.space"
       - name: Resolve source branch
         id: source
         shell: bash
@@ -114,7 +118,7 @@ jobs:
           while IFS= read -r commit; do
             [ -z "$commit" ] && continue
             echo "Cherry-picking $commit"
-            git cherry-pick -x "$commit"
+            git cherry-pick "$commit"
           done <<< "${{ steps.commits.outputs.commits }}"
 
       - name: Publish temporary result as export branch
