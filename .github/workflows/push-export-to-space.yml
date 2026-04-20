@@ -1,0 +1,107 @@
+name: Push export branch to Space
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Original feature branch name, for example bulgakov/WRS-01Test-cherry-pick'
+        required: true
+        type: string
+      force_push:
+        description: 'Use force push'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  push-to-space:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    env:
+      SPACE_REMOTE_NAME: space
+      SPACE_REPO_URL: git@github.com:BulgakovAnton/sandbox-fake.git
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch export branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPORT_BRANCH="export/${{ inputs.source_branch }}"
+          git fetch origin "${EXPORT_BRANCH}:${EXPORT_BRANCH}"
+
+      - name: Configure git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Writerside Export Bot"
+          git config user.email "writerside-export-bot@jetbrains.space"
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SPACE_SSH_PRIVATE_KEY: ${{ secrets.SPACE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          echo "${SPACE_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Add Space remote
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git remote get-url "${SPACE_REMOTE_NAME}" >/dev/null 2>&1; then
+            git remote remove "${SPACE_REMOTE_NAME}"
+          fi
+
+          git remote add "${SPACE_REMOTE_NAME}" "${SPACE_REPO_URL}"
+          git remote -v
+
+      - name: Verify export branch is clean
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPORT_BRANCH="export/${{ inputs.source_branch }}"
+          git checkout "${EXPORT_BRANCH}"
+
+          if git ls-tree -r --name-only HEAD | grep '^.github/'; then
+            echo "ERROR: .github exists in export branch"
+            exit 1
+          fi
+
+          echo "Export branch is clean"
+
+      - name: Push export branch to Space
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPORT_BRANCH="export/${{ inputs.source_branch }}"
+
+          if [ "${{ inputs.force_push }}" = "true" ]; then
+            git push --force "${SPACE_REMOTE_NAME}" "${EXPORT_BRANCH}:${{ inputs.source_branch }}"
+          else
+            git push "${SPACE_REMOTE_NAME}" "${EXPORT_BRANCH}:${{ inputs.source_branch }}"
+          fi
+
+      - name: Show result
+        shell: bash
+        run: |
+          echo "Pushed export/${{ inputs.source_branch }} to Space branch ${{ inputs.source_branch }}"
