@@ -111,7 +111,18 @@ jobs:
           while IFS= read -r commit; do
             [ -z "$commit" ] && continue
             echo "Cherry-picking $commit"
-            git cherry-pick "$commit"
+
+            if git cherry-pick "$commit"; then
+              echo "Cherry-pick applied: $commit"
+            else
+              if git status | grep -q "nothing to commit, working tree clean"; then
+                echo "Cherry-pick is empty, skipping: $commit"
+                git cherry-pick --skip
+              else
+                echo "Cherry-pick failed with real conflict: $commit"
+                exit 1
+              fi
+            fi
           done <<< "${{ steps.commits.outputs.commits }}"
 
       - name: Publish export branch
