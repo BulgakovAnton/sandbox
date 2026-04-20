@@ -1,9 +1,11 @@
 name: Sync master from Space
 
 on:
-  schedule:
-    - cron: '0 9 * * *'
-  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Push export branch to fake Space"
+    types:
+      - completed
 
 permissions:
   contents: write
@@ -15,28 +17,19 @@ env:
 jobs:
   sync-master:
     name: Sync master from Space + rebase master-jetforcer
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Check actor is admin
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh --version
-          ROLE=$(gh api repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission --jq '.permission')
-          echo "Actor ${{ github.actor }} has role: $ROLE"
-          if [[ "$ROLE" != "admin" ]]; then
-            echo "Only admins can sync from Space"
-            exit 1
-          fi
+    environment:
+      name: sync-from-space
 
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: master-jetforcer
 
       - name: Configure git identity
         run: |
@@ -61,9 +54,9 @@ jobs:
           git remote remove "${SPACE_REMOTE_NAME}" || true
           git remote add "${SPACE_REMOTE_NAME}" "${SPACE_REPO_URL}"
           git fetch "${SPACE_REMOTE_NAME}" master
-          echo "Space remote added and fetched"
+          git fetch origin master master-jetforcer --prune
 
-      - name: Sync master from Space
+      - name: Sync GitHub master from Space
         run: |
           set -euo pipefail
 
@@ -75,30 +68,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! git ls-remote --exit-code --heads origin master-jetforcer; then
-            echo "master-jetforcer does not exist yet — skipping rebase"
-            exit 0
-          fi
-
-          git fetch origin master-jetforcer
           git checkout master-jetforcer
           git rebase master
           git push --force-with-lease origin master-jetforcer
-
-      - name: Notify on failure
-        if: failure()
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${SLACK_WEBHOOK:-}" ]]; then
-            echo "SLACK_WEBHOOK not set — skipping notification"
-            exit 0
-          fi
-
-          curl -s -X POST "${SLACK_WEBHOOK}" \
-            -H 'Content-type: application/json' \
-            -d '{
-              "text": "Sync from Space failed\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }'
