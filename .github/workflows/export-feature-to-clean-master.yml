@@ -1,9 +1,9 @@
 name: Prepare export branch for Space
 
 on:
-  push:
+  pull_request:
     branches:
-      - '**/WRS-*'
+      - master-jetforcer
   workflow_dispatch:
     inputs:
       source_branch:
@@ -36,6 +36,7 @@ jobs:
         run: |
           git config user.name "Writerside Export Bot"
           git config user.email "writerside-export-bot@jetbrains.space"
+
       - name: Resolve source branch
         id: source
         shell: bash
@@ -46,7 +47,8 @@ jobs:
             SOURCE_BRANCH="${{ inputs.source_branch }}"
             git fetch origin "${SOURCE_BRANCH}:${SOURCE_BRANCH}"
           else
-            SOURCE_BRANCH="${GITHUB_REF_NAME}"
+            SOURCE_BRANCH="${{ github.head_ref }}"
+            git fetch origin "${SOURCE_BRANCH}:${SOURCE_BRANCH}"
           fi
 
           EXPORT_BRANCH="export/${SOURCE_BRANCH}"
@@ -86,9 +88,6 @@ jobs:
             exit 0
           fi
 
-          echo "Commits to export:"
-          echo "${COMMITS}"
-
           {
             echo "has_commits=true"
             echo "commits<<EOF"
@@ -98,16 +97,10 @@ jobs:
 
       - name: Create temporary clean branch from master
         if: steps.commits.outputs.has_commits == 'true'
-        id: temp
         shell: bash
         run: |
           set -euo pipefail
-
-          TEMP_BRANCH="tmp-export-${GITHUB_RUN_ID}"
-          git checkout -B "${TEMP_BRANCH}" "${CLEAN_BASE}"
-
-          echo "temp_branch=${TEMP_BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "Temporary branch: ${TEMP_BRANCH}"
+          git checkout -B "tmp-export-${GITHUB_RUN_ID}" "${CLEAN_BASE}"
 
       - name: Cherry-pick commits onto temporary clean branch
         if: steps.commits.outputs.has_commits == 'true'
@@ -121,7 +114,7 @@ jobs:
             git cherry-pick "$commit"
           done <<< "${{ steps.commits.outputs.commits }}"
 
-      - name: Publish temporary result as export branch
+      - name: Publish export branch
         if: steps.commits.outputs.has_commits == 'true'
         shell: bash
         run: |
@@ -149,17 +142,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          EXPORT_BRANCH="${{ steps.source.outputs.export_branch }}"
-          git push --force origin "${EXPORT_BRANCH}"
-
-      - name: Cleanup temporary branch
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          TEMP_BRANCH="${{ steps.temp.outputs.temp_branch }}"
-          if [ -n "${TEMP_BRANCH:-}" ]; then
-            git branch -D "${TEMP_BRANCH}" || true
-          fi
+          git push --force origin "${{ steps.source.outputs.export_branch }}"
