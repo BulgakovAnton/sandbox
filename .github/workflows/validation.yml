@@ -74,27 +74,13 @@ jobs:
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_REF="origin/${{ github.base_ref }}"
-            HEAD_REF="HEAD"
-            RANGE="${BASE_REF}..${HEAD_REF}"
+            COMMITS="$(git rev-list --reverse "${BASE_REF}..HEAD")"
           else
-            BEFORE_SHA="${{ github.event.before }}"
-            AFTER_SHA="${{ github.sha }}"
-
-            if [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-              RANGE="${AFTER_SHA}"
-            else
-              RANGE="${BEFORE_SHA}..${AFTER_SHA}"
-            fi
+            COMMITS="$(git rev-parse HEAD)"
           fi
 
-          echo "Checking commit messages in range: ${RANGE}"
-
-          COMMITS="$(git rev-list --reverse "${RANGE}")"
-
-          if [ -z "${COMMITS}" ]; then
-            echo "No commits to validate"
-            exit 0
-          fi
+          echo "Checking commit messages for commits:"
+          echo "${COMMITS}"
 
           FAILED=0
 
@@ -154,27 +140,13 @@ jobs:
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_REF="origin/${{ github.base_ref }}"
-            HEAD_REF="HEAD"
-            RANGE="${BASE_REF}..${HEAD_REF}"
+            COMMITS="$(git rev-list --reverse "${BASE_REF}..HEAD")"
           else
-            BEFORE_SHA="${{ github.event.before }}"
-            AFTER_SHA="${{ github.sha }}"
-
-            if [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-              RANGE="${AFTER_SHA}"
-            else
-              RANGE="${BEFORE_SHA}..${AFTER_SHA}"
-            fi
+            COMMITS="$(git rev-parse HEAD)"
           fi
 
-          echo "Checking authors in range: ${RANGE}"
-
-          COMMITS="$(git rev-list --reverse "${RANGE}")"
-
-          if [ -z "${COMMITS}" ]; then
-            echo "No commits to validate"
-            exit 0
-          fi
+          echo "Checking authors for commits:"
+          echo "${COMMITS}"
 
           FAILED=0
 
