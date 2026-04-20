@@ -1,0 +1,104 @@
+name: Sync master from Space
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  SPACE_REMOTE_NAME: space
+  SPACE_REPO_URL: git@github.com:BulgakovAnton/sandbox-fake.git
+
+jobs:
+  sync-master:
+    name: Sync master from Space + rebase master-jetforcer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check actor is admin
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh --version
+          ROLE=$(gh api repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission --jq '.permission')
+          echo "Actor ${{ github.actor }} has role: $ROLE"
+          if [[ "$ROLE" != "admin" ]]; then
+            echo "Only admins can sync from Space"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Writerside Sync Bot"
+          git config user.email "writerside-sync-bot@jetbrains.space"
+
+      - name: Configure SSH
+        env:
+          SPACE_SSH_PRIVATE_KEY: ${{ secrets.SPACE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${SPACE_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Add Space remote
+        run: |
+          set -euo pipefail
+          git remote remove "${SPACE_REMOTE_NAME}" || true
+          git remote add "${SPACE_REMOTE_NAME}" "${SPACE_REPO_URL}"
+          git fetch "${SPACE_REMOTE_NAME}" master
+          echo "Space remote added and fetched"
+
+      - name: Sync master from Space
+        run: |
+          set -euo pipefail
+
+          git checkout master
+          git reset --hard "${SPACE_REMOTE_NAME}/master"
+          git push --force origin master
+
+      - name: Rebase master-jetforcer onto fresh master
+        run: |
+          set -euo pipefail
+
+          if ! git ls-remote --exit-code --heads origin master-jetforcer; then
+            echo "master-jetforcer does not exist yet — skipping rebase"
+            exit 0
+          fi
+
+          git fetch origin master-jetforcer
+          git checkout master-jetforcer
+          git rebase master
+          git push --force-with-lease origin master-jetforcer
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SLACK_WEBHOOK:-}" ]]; then
+            echo "SLACK_WEBHOOK not set — skipping notification"
+            exit 0
+          fi
+
+          curl -s -X POST "${SLACK_WEBHOOK}" \
+            -H 'Content-type: application/json' \
+            -d '{
+              "text": "Sync from Space failed\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'

@@ -21,6 +21,59 @@ jobs:
       SPACE_REPO_URL: git@github.com:BulgakovAnton/sandbox-fake.git
 
     steps:
+      - name: Check actor is admin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ROLE=$(gh api repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission \
+            --jq '.permission')
+          echo "Actor ${{ github.actor }} has role: $ROLE"
+          if [[ "$ROLE" != "admin" ]]; then
+            echo "❌ Only admins can push to Space"
+            exit 1
+          fi
+          echo "✅ Actor is admin"
+
+      - name: Check all required checks are green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          SHA="${{ github.event.pull_request.head.sha }}"
+          REPO="${{ github.repository }}"
+
+          echo "Checking status checks for $SHA"
+
+          # Ждём максимум 15 минут (30 попыток по 30 секунд)
+          for i in $(seq 1 30); do
+            RUNS=$(gh api repos/$REPO/commits/$SHA/check-runs --jq '.check_runs[]')
+
+            PENDING=$(echo "$RUNS" | jq -r \
+              'select(.name != "Push export branch to fake Space") | select(.status != "completed")' \
+              | wc -l)
+
+            FAILED=$(echo "$RUNS" | jq -r \
+              'select(.name != "Push export branch to fake Space") | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")' \
+              | wc -l)
+
+            if [[ $FAILED -gt 0 ]]; then
+              echo "❌ Some checks failed — cannot push to Space"
+              gh api repos/$REPO/commits/$SHA/check-runs \
+                --jq '.check_runs[] | select(.name != "Push export branch to fake Space") | "\(.name): \(.conclusion)"'
+              exit 1
+            fi
+
+            if [[ $PENDING -eq 0 ]]; then
+              echo "✅ All checks passed"
+              break
+            fi
+
+            echo "⏳ Waiting for checks... attempt $i/30"
+            sleep 30
+          done
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -31,6 +84,7 @@ jobs:
           set -euo pipefail
           SOURCE_BRANCH="${{ github.head_ref }}"
           EXPORT_BRANCH="export/${SOURCE_BRANCH}"
+          echo "Fetching export branch: $EXPORT_BRANCH"
           git fetch origin "${EXPORT_BRANCH}:${EXPORT_BRANCH}"
           git checkout "${EXPORT_BRANCH}"
 
@@ -60,13 +114,16 @@ jobs:
       - name: Verify export branch is clean
         run: |
           set -euo pipefail
-          if git ls-tree -r --name-only HEAD | grep '^.github/'; then
-            echo "ERROR: .github exists in export branch"
+          if git ls-tree -r --name-only HEAD | grep '^\.github/'; then
+            echo "❌ ERROR: .github exists in export branch — aborting"
             exit 1
           fi
+          echo "✅ Export branch is clean"
 
       - name: Push export branch to fake Space
         run: |
           set -euo pipefail
           SOURCE_BRANCH="${{ github.head_ref }}"
+          echo "Pushing to Space as branch: $SOURCE_BRANCH"
           git push --force "${SPACE_REMOTE_NAME}" "HEAD:${SOURCE_BRANCH}"
+          echo "✅ Successfully pushed to Space"
