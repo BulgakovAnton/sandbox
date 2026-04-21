@@ -4,12 +4,20 @@ on:
   pull_request:
     branches:
       - master-jetforcer
+    types:
+      - opened
+      - synchronize
+      - reopened
   workflow_dispatch:
     inputs:
       source_branch:
         description: 'Feature branch to export'
         required: true
         type: string
+
+concurrency:
+  group: export-${{ github.event.pull_request.head.ref || inputs.source_branch }}
+  cancel-in-progress: true
 
 jobs:
   export:
@@ -27,9 +35,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: master
 
       - name: Fetch required branches
         run: |
+          set -euo pipefail
           git fetch origin master master-jetforcer --prune
 
       - name: Configure git identity
@@ -37,7 +47,7 @@ jobs:
           git config user.name "Writerside Export Bot"
           git config user.email "writerside-export-bot@jetbrains.space"
 
-      - name: Resolve source branch
+      - name: Resolve source branch and exact head SHA
         id: source
         shell: bash
         run: |
@@ -45,18 +55,22 @@ jobs:
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             SOURCE_BRANCH="${{ inputs.source_branch }}"
-            git fetch origin "${SOURCE_BRANCH}:${SOURCE_BRANCH}"
+            git fetch origin "${SOURCE_BRANCH}"
+            SOURCE_SHA="$(git rev-parse "origin/${SOURCE_BRANCH}")"
           else
             SOURCE_BRANCH="${{ github.head_ref }}"
-            git fetch origin "${SOURCE_BRANCH}:${SOURCE_BRANCH}"
+            SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
+            git fetch origin "${SOURCE_BRANCH}"
           fi
 
           EXPORT_BRANCH="export/${SOURCE_BRANCH}"
 
           echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
           echo "export_branch=${EXPORT_BRANCH}" >> "$GITHUB_OUTPUT"
 
           echo "Source branch: ${SOURCE_BRANCH}"
+          echo "Source SHA: ${SOURCE_SHA}"
           echo "Export branch: ${EXPORT_BRANCH}"
 
       - name: Verify .github was not changed in feature branch
@@ -64,9 +78,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          SOURCE_BRANCH="${{ steps.source.outputs.source_branch }}"
+          SOURCE_SHA="${{ steps.source.outputs.source_sha }}"
 
-          if git diff --name-only "${DEV_BASE}...${SOURCE_BRANCH}" -- .github | grep .; then
+          if git diff --name-only "${DEV_BASE}...${SOURCE_SHA}" -- .github | grep .; then
             echo "ERROR: .github was changed in feature branch"
             exit 1
           fi
@@ -79,8 +93,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          SOURCE_BRANCH="${{ steps.source.outputs.source_branch }}"
-          COMMITS="$(git rev-list --reverse --no-merges "${DEV_BASE}..${SOURCE_BRANCH}")"
+          SOURCE_SHA="${{ steps.source.outputs.source_sha }}"
+          MERGE_BASE="$(git merge-base "${DEV_BASE}" "${SOURCE_SHA}")"
+          COMMITS="$(git rev-list --reverse --no-merges "${MERGE_BASE}..${SOURCE_SHA}")"
 
           if [ -z "${COMMITS}" ]; then
             echo "No feature commits to export"
@@ -114,26 +129,29 @@ jobs:
 
             if git cherry-pick "$commit"; then
               echo "Cherry-pick applied: $commit"
+              continue
+            fi
+
+            echo "Cherry-pick reported conflicts for: $commit"
+
+            unmerged="$(git diff --name-only --diff-filter=U || true)"
+            if [ -n "$unmerged" ]; then
+              while IFS= read -r path; do
+                [ -z "$path" ] && continue
+                echo "Resolving conflicted path: $path"
+                git checkout --theirs -- "$path" || true
+                git add -- "$path" || true
+              done <<< "$unmerged"
+            fi
+
+            if git cherry-pick --continue; then
+              echo "Cherry-pick auto-resolved: $commit"
             else
-              if git status | grep -q "nothing to commit, working tree clean"; then
-                echo "Cherry-pick is empty, skipping: $commit"
-                git cherry-pick --skip
-              else
-                echo "Cherry-pick failed with real conflict: $commit"
-                exit 1
-              fi
+              echo "Cherry-pick failed with real conflict: $commit"
+              git status
+              exit 1
             fi
           done <<< "${{ steps.commits.outputs.commits }}"
-
-      - name: Publish export branch
-        if: steps.commits.outputs.has_commits == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          EXPORT_BRANCH="${{ steps.source.outputs.export_branch }}"
-          git branch -f "${EXPORT_BRANCH}" HEAD
-          git checkout "${EXPORT_BRANCH}"
 
       - name: Final safety checks
         if: steps.commits.outputs.has_commits == 'true'
@@ -148,9 +166,12 @@ jobs:
 
           echo "Export branch is clean"
 
-      - name: Push export branch
+      - name: Publish export branch
         if: steps.commits.outputs.has_commits == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          git push --force origin "${{ steps.source.outputs.export_branch }}"
+
+          EXPORT_BRANCH="${{ steps.source.outputs.export_branch }}"
+          git branch -f "${EXPORT_BRANCH}" HEAD
+          git push --force origin "HEAD:${EXPORT_BRANCH}"
