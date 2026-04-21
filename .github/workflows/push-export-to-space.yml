@@ -46,33 +46,48 @@ jobs:
 
           echo "Checking status checks for $SHA"
 
-          # Ждём максимум 15 минут (30 попыток по 30 секунд)
           for i in $(seq 1 30); do
-            RUNS=$(gh api repos/$REPO/commits/$SHA/check-runs --jq '.check_runs[]')
+            CHECKS_JSON="$(gh api repos/$REPO/commits/$SHA/check-runs)"
 
-            PENDING=$(echo "$RUNS" | jq -r \
-              'select(.name != "Push export branch to fake Space") | select(.status != "completed")' \
-              | wc -l)
+            echo "Current checks:"
+            echo "$CHECKS_JSON" | jq -r '.check_runs[] | "\(.name) | status=\(.status) | conclusion=\(.conclusion)"'
 
-            FAILED=$(echo "$RUNS" | jq -r \
-              'select(.name != "Push export branch to fake Space") | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")' \
-              | wc -l)
+            PENDING=$(echo "$CHECKS_JSON" | jq -r '
+              .check_runs[]
+              | select(.name != "push-to-fake-space")
+              | select(.name != "Push export branch to fake Space")
+              | select(.status != "completed")
+            ' | wc -l)
+
+            FAILED=$(echo "$CHECKS_JSON" | jq -r '
+              .check_runs[]
+              | select(.name != "push-to-fake-space")
+              | select(.name != "Push export branch to fake Space")
+              | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required")
+            ' | wc -l)
 
             if [[ $FAILED -gt 0 ]]; then
               echo "❌ Some checks failed — cannot push to Space"
-              gh api repos/$REPO/commits/$SHA/check-runs \
-                --jq '.check_runs[] | select(.name != "Push export branch to fake Space") | "\(.name): \(.conclusion)"'
+              echo "$CHECKS_JSON" | jq -r '
+                .check_runs[]
+                | select(.name != "push-to-fake-space")
+                | select(.name != "Push export branch to fake Space")
+                | "\(.name): \(.conclusion)"
+              '
               exit 1
             fi
 
             if [[ $PENDING -eq 0 ]]; then
               echo "✅ All checks passed"
-              break
+              exit 0
             fi
 
             echo "⏳ Waiting for checks... attempt $i/30"
             sleep 30
           done
+
+          echo "❌ Timed out waiting for checks to complete"
+          exit 1
 
       - name: Checkout repository
         uses: actions/checkout@v4

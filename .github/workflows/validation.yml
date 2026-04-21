@@ -37,7 +37,7 @@ jobs:
           BRANCH_NAME="${{ steps.branch.outputs.branch_name }}"
 
           case "${BRANCH_NAME}" in
-            master|main|master-jetforcer|export/*)
+            master|main|master-jetforcer)
               echo "Branch is excluded from validation: ${BRANCH_NAME}"
               exit 0
               ;;

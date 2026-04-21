@@ -1,11 +1,9 @@
 name: Sync master from Space
 
 on:
-  workflow_run:
-    workflows:
-      - "Push export branch to fake Space"
-    types:
-      - completed
+  pull_request:
+    branches:
+      - master-jetforcer
 
 permissions:
   contents: write
