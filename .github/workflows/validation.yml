@@ -1,0 +1,221 @@
+name: Validations
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  branch-name:
+    name: Validate branch name
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve branch name
+        id: branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH_NAME="${{ github.head_ref }}"
+          else
+            BRANCH_NAME="${GITHUB_REF_NAME}"
+          fi
+
+          echo "branch_name=${BRANCH_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Branch: ${BRANCH_NAME}"
+
+      - name: Validate branch format
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRANCH_NAME="${{ steps.branch.outputs.branch_name }}"
+
+          case "${BRANCH_NAME}" in
+            master|main|master-jetforcer)
+              echo "Branch is excluded from validation: ${BRANCH_NAME}"
+              exit 0
+              ;;
+          esac
+
+          if [[ "${BRANCH_NAME}" =~ ^[a-zA-Z0-9-]+/WRS-[0-9]+-[a-zA-Z0-9-]+$ ]]; then
+            echo "Branch name is valid"
+          else
+            echo "ERROR: Invalid branch name: ${BRANCH_NAME}"
+            echo "Expected format: <username>/WRS-<number>-<description>"
+            exit 1
+          fi
+
+  commit-messages:
+    name: Validate commit messages
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Checkout push commit
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin --prune
+          git fetch origin master-jetforcer --prune
+
+      - name: Validate commit messages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "${GITHUB_REF_NAME}" = "master-jetforcer" ]; then
+            echo "Skipping commit message validation for master-jetforcer"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF_NAME}" == export/* ]]; then
+            echo "Skipping commit message validation for export branch"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            COMMITS="$(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")"
+          else
+            MERGE_BASE="$(git merge-base HEAD origin/master-jetforcer)"
+            COMMITS="$(git rev-list --reverse "${MERGE_BASE}..HEAD")"
+          fi
+
+          echo "Checking commit messages for commits:"
+          echo "${COMMITS}"
+
+          if [ -z "${COMMITS}" ]; then
+            echo "No commits to validate"
+            exit 0
+          fi
+
+          FAILED=0
+
+          while IFS= read -r commit; do
+            [ -z "$commit" ] && continue
+
+            SUBJECT="$(git log -1 --format=%s "$commit")"
+            LENGTH=${#SUBJECT}
+
+            echo "Checking commit $commit"
+            echo "Subject: $SUBJECT"
+
+            if [ "$LENGTH" -gt 150 ]; then
+              echo "ERROR: Commit subject is longer than 150 characters"
+              FAILED=1
+              continue
+            fi
+
+            if [[ ! "$SUBJECT" =~ ^WRS-[0-9]+[[:space:]]-[[:space:]].+ ]]; then
+              echo "ERROR: Invalid commit subject format"
+              FAILED=1
+              continue
+            fi
+          done <<< "${COMMITS}"
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+
+  allowed-authors:
+    name: Validate allowed authors
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Checkout push commit
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin --prune
+          git fetch origin master-jetforcer --prune
+
+      - name: Validate authors
+        shell: bash
+        env:
+          ALLOWED_AUTHORS: ${{ secrets.ALLOWED_AUTHORS }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ALLOWED_AUTHORS:-}" ]; then
+            echo "ERROR: ALLOWED_AUTHORS secret is empty or not configured"
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "${GITHUB_REF_NAME}" = "master-jetforcer" ]; then
+            echo "Skipping author validation for master-jetforcer"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF_NAME}" == export/* ]]; then
+            echo "Skipping author validation for export branch"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            COMMITS="$(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")"
+          else
+            MERGE_BASE="$(git merge-base HEAD origin/master-jetforcer)"
+            COMMITS="$(git rev-list --reverse "${MERGE_BASE}..HEAD")"
+          fi
+
+          echo "Checking authors for commits:"
+          echo "${COMMITS}"
+
+          if [ -z "${COMMITS}" ]; then
+            echo "No commits to validate"
+            exit 0
+          fi
+
+          FAILED=0
+
+          while IFS= read -r commit; do
+            [ -z "$commit" ] && continue
+
+            AUTHOR="$(git log -1 --format='%an <%ae>' "$commit")"
+
+            echo "Checking commit $commit"
+            echo "Author: $AUTHOR"
+
+            if ! printf '%s\n' "${ALLOWED_AUTHORS}" | grep -Fxq "$AUTHOR"; then
+              echo "ERROR: Author is not allowed: $AUTHOR"
+              FAILED=1
+            fi
+          done <<< "${COMMITS}"
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
