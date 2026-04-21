@@ -56,6 +56,7 @@ jobs:
               .check_runs[]
               | select(.name != "push-to-fake-space")
               | select(.name != "Push export branch to fake Space")
+              | select(.name != "Sync master from Space + rebase master-jetforcer")
               | select(.status != "completed")
             ' | wc -l)
 
@@ -63,6 +64,7 @@ jobs:
               .check_runs[]
               | select(.name != "push-to-fake-space")
               | select(.name != "Push export branch to fake Space")
+              | select(.name != "Sync master from Space + rebase master-jetforcer")
               | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required")
             ' | wc -l)
 
@@ -72,6 +74,7 @@ jobs:
                 .check_runs[]
                 | select(.name != "push-to-fake-space")
                 | select(.name != "Push export branch to fake Space")
+                | select(.name != "Sync master from Space + rebase master-jetforcer")
                 | "\(.name): \(.conclusion)"
               '
               exit 1
